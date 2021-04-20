@@ -5,176 +5,81 @@
 #include <vector>
 
 using Floor = int;
-using Passenger = int;
-using Queue = std::vector<Passenger>;
-enum class Direction : int { UP = 1, DOWN = -1 };
-
+using Queue = std::vector<Floor>;
+using Queues = std::vector<Queue>;
 class Lift {
 public:
-  Lift() = delete;
-  Lift(std::vector<Queue> &queues, size_t capacity)
-      : m_queues(queues), m_capacity(capacity){};
-
-  bool work() {
-    goto_and_log(m_next);
-    unload();
-    load();
-    determine_next_floor();
-    return has_work_todo();
+  Queue work(Queues queues, size_t capacity) {
+    print(queues, capacity);
+    top_floor_ = static_cast<Floor>(queues.size() - 1);
+    while (true) {
+      bool did_stop = unload();
+      change_dir_at_end();
+      did_stop |= load(queues[floor_], capacity);
+      bool finished = is_finished(queues);
+      log_floor(did_stop || finished);
+      move_to_next();
+      if (finished)
+        break;
+    }
+    return log_;
   }
-
-  std::vector<Queue> &m_queues;
-  size_t m_capacity{};
-  std::vector<Passenger> m_passengers{};
-  Direction m_direction{Direction::UP};
-  Floor m_floor{};
-  Floor m_next{0};
-  std::vector<Floor> m_log{};
 
 private:
-  bool has_work_todo() {
-    bool clients_left = std::any_of(m_queues.begin(), m_queues.end(),
-                                    [](const auto &q) { return !q.empty(); });
-    bool passengers_left = !m_passengers.empty();
-    bool has_returned_home = m_log.back() == 0;
-    return clients_left || passengers_left || !has_returned_home;
-  }
-
-  void goto_and_log(Floor next) {
-    m_floor = next;
-    if (m_log.empty() || m_log.back() != m_floor)
-      m_log.push_back(m_floor);
-  }
-
-  void unload() {
-    const auto old_end = m_passengers.end();
-    const auto new_end =
-        std::remove(m_passengers.begin(), m_passengers.end(), m_floor);
-    m_passengers.erase(new_end, old_end);
-  }
-
-  void load() {
-    Queue &queue = m_queues[m_floor];
-
-    bool load_another = true;
-    while (is_capacity_left() && load_another) {
-      load_another = false;
-      const auto passenger =
-          std::find_if(queue.begin(), queue.end(), [&](auto desired_floor) {
-            if (m_direction == Direction::UP)
-              return desired_floor > m_floor;
-            else
-              return desired_floor < m_floor;
-          });
-      if (passenger != queue.end()) {
-        m_passengers.push_back(*passenger);
-        queue.erase(passenger);
-        load_another = true;
+  void print(Queues queues, size_t capacity) {
+    std::cout << "capacity: " << capacity << std::endl;
+    for (auto q : queues) {
+      std::cout << "{";
+      for (auto e : q) {
+        std::cout << e << ",";
       }
+      std::cout << "}" << std::endl;
     }
   }
-
-  bool is_capacity_left() { return m_capacity > m_passengers.size(); }
-
-  bool determine_next_up() {
-    Floor passenger_wish = m_queues.size();
-    for (auto p : m_passengers)
-      if (p < passenger_wish)
-        passenger_wish = p;
-
-    Floor client_request = m_queues.size();
-    Floor floor = is_capacity_left() ? m_floor : m_floor + 1;
-    for (; floor < m_queues.size(); ++floor) {
-      if (m_queues[floor].empty())
-        continue;
-      else if (std::any_of(m_queues[floor].begin(), m_queues[floor].end(),
-                           [&](auto f) { return f > floor; })) {
-        client_request = floor;
-        break;
-      }
-    }
-
-    m_next = std::min(passenger_wish, client_request);
-    return m_next != m_queues.size();
+  bool unload() {
+    const auto old_end = cargo_.end();
+    return old_end !=
+           cargo_.erase(std::remove(cargo_.begin(), cargo_.end(), floor_),
+                        old_end);
   }
-
-  bool determine_next_down() {
-    Floor passenger_wish = -1;
-    for (auto p : m_passengers)
-      if (p > passenger_wish)
-        passenger_wish = p;
-
-    Floor client_request = -1;
-    Floor floor = is_capacity_left() ? m_floor : m_floor - 1;
-    for (; floor > -1; --floor) {
-      if (m_queues[floor].empty())
-        continue;
-      else if (std::any_of(m_queues[floor].begin(), m_queues[floor].end(),
-                           [&](auto f) { return f < floor; })) {
-        client_request = floor;
-        break;
-      }
-    }
-
-    m_next = std::max(passenger_wish, client_request);
-    return m_next != -1;
+  void change_dir_at_end() {
+    if ((dir_ > 0 && floor_ == top_floor_) ||
+        (dir_ < 0 && floor_ == bottom_floor_))
+      dir_ *= -1;
   }
-
-  void determine_next_floor() {
-    bool has_work = false;
-
-    // Work left in the same direction?
-    if (m_direction == Direction::UP) {
-      has_work = determine_next_up();
-    } else {
-      has_work = determine_next_down();
-    }
-
-    if (!has_work) {
-      // Work left in the other direction?
-      if (m_direction == Direction::UP) {
-        m_direction = Direction::DOWN;
-        m_floor = m_queues.size() - 1;
-        has_work = determine_next_down();
-      } else {
-        m_direction = Direction::UP;
-        m_floor = 0;
-        has_work = determine_next_up();
+  bool load(Queue &queue, size_t capacity) {
+    bool did_stop = false;
+    for (auto it = queue.begin(); it != queue.end();) {
+      if ((dir_ > 0 && *it > floor_) || (dir_ < 0 && *it < floor_)) {
+        did_stop = true;
+        if (cargo_.size() < capacity) {
+          cargo_.push_back(*it);
+          it = queue.erase(it);
+          continue;
+        }
       }
+      ++it;
     }
-
-    if (!has_work) {
-      // Work left in the other direction?
-      if (m_direction == Direction::UP) {
-        m_direction = Direction::DOWN;
-        m_floor = m_queues.size() - 1;
-        has_work = determine_next_down();
-      } else {
-        m_direction = Direction::UP;
-        m_floor = 0;
-        has_work = determine_next_up();
-      }
-    }
-
-    if (!has_work) {
-      // Go home
-      m_direction = Direction::DOWN;
-      m_next = 0;
-    }
+    return did_stop;
   }
+  bool is_finished(Queues queues) {
+    return (floor_ == 0 && cargo_.empty() &&
+            std::all_of(queues.begin(), queues.end(),
+                        [](const auto &q) { return q.empty(); }));
+  }
+  void log_floor(bool should_log) {
+    if (should_log && log_.back() != floor_)
+      log_.push_back(floor_);
+  }
+  void move_to_next() { floor_ += 1 * dir_; }
+  const Floor bottom_floor_ = 0;
+  Floor top_floor_ = 0;
+  Queue log_{bottom_floor_};
+  Queue cargo_{};
+  Floor floor_{bottom_floor_};
+  Floor dir_{+1};
 };
 
-std::vector<int> the_lift(std::vector<Queue> queues, int capacity) {
-  std::cout << "capacity: " << capacity << std::endl;
-  for (auto q : queues) {
-    std::cout << "{";
-    for (auto e : q) {
-      std::cout << e << ",";
-    }
-    std::cout << "}" << std::endl;
-  }
-  Lift lift(queues, capacity);
-  while (lift.work()) {
-  }
-  return lift.m_log;
+Queue the_lift(Queues queues, size_t capacity) {
+  return Lift().work(queues, capacity);
 }
